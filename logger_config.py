@@ -1,89 +1,116 @@
+from __future__ import annotations
+
 import logging
-import os
+from enum import StrEnum
+from typing import Any
+
+
+class LogLevel(StrEnum):
+    """String Enum for log levels to ensure type safety."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+    @classmethod
+    def get_logging_level(cls, level: str) -> int:
+        try:
+            return getattr(logging, level.upper())
+        except AttributeError as exc:
+            raise ValueError(f"Invalid log level string: {level}") from exc
+
+    @classmethod
+    def from_logging_level(cls, level: int) -> LogLevel:
+        for member in cls:
+            if getattr(logging, member.value) == level:
+                return member
+        raise ValueError(f"No LogLevel member corresponds to logging level {level}")
 
 
 class CustomFormatter(logging.Formatter):
+    """Custom formatter with colored output for console."""
 
-    @staticmethod
-    def get_color(level):
-        """Returns the ANSI color code based on the log level"""
-        colors = {
-            logging.DEBUG: "\x1b[38;20m",  # Gris
-            logging.INFO: "\x1b[32;1m",  # Vert
-            logging.WARNING: "\x1b[33;20m",  # Jaune
-            logging.ERROR: "\x1b[31;20m",  # Rouge
-            logging.CRITICAL: "\x1b[31;1m",  # Rouge Gras
-        }
-        return colors.get(level, "\x1b[0m")  # Défaut : reset
+    COLORS: dict[LogLevel, str] = {
+        LogLevel.DEBUG: "\x1b[38;20m",
+        LogLevel.INFO: "\x1b[32;1m",
+        LogLevel.WARNING: "\x1b[33;20m",
+        LogLevel.ERROR: "\x1b[31;20m",
+        LogLevel.CRITICAL: "\x1b[31;1m",
+    }
 
-    @staticmethod
-    def get_format(level):
-        """Returns the log format with the appropriate color."""
-        reset = "\x1b[0m"
-        base_format = "%(asctime)s - %(name)s - [%(levelname)8s] - %(message)s"
-        color = CustomFormatter.get_color(level)
-        return f"{color}{base_format}{reset}"
+    RESET = "\x1b[0m"
+    BASE_FORMAT = "%(asctime)s - %(name)s - [%(levelname)8s] - %(message)s"
 
-    def format(self, record):
-        """Applies dynamic formatting based on log level."""
-        log_fmt = self.get_format(record.levelno)
+    def format(self, record: logging.LogRecord) -> str:
+        level_enum = LogLevel.from_logging_level(record.levelno)
+        color = self.COLORS.get(level_enum, self.RESET)
+
+        log_fmt = f"{color}{self.BASE_FORMAT}{self.RESET}"
         formatter = logging.Formatter(log_fmt)
         return formatter.format(record)
 
 
 class LoggerSingleton:
-    """
-    Singleton for centralized logger management.
-    """
+    _instance: LoggerSingleton | None = None
 
-    _instance = None  # Stores the single instance
-    log_level = None
-
-    def __new__(cls, log_level=None):
-        if not log_level:
-            log_level = "INFO"
-        if cls._instance is None or log_level is not cls.log_level:
-            print(f"instaciation logger level : {log_level}")
-            cls._instance = super(LoggerSingleton, cls).__new__(cls)
-            cls.log_level = log_level
-            # 🔥 Creating the unique logger
-            cls._instance.logger = logging.getLogger("app_logger")
-
-            # Clean previous handlers if logger was already instantiated and is only changing level
-            handlers = list(cls._instance.logger.handlers)
-            for handler in handlers:
-                cls._instance.logger.removeHandler(handler)
-
-            # Default to INFO if invalid
-
-            cls._instance.logger.setLevel(log_level)
-
-            # 📂 directory logs under app/
-            log_dir = os.path.join(os.getcwd(), "logs")
-            log_file = os.path.join(log_dir, "app.log")
-            os.makedirs(log_dir, exist_ok=True)
-
-            # 🎨 Formatter for logs
-            log_format = logging.Formatter(
-                "%(asctime)s - %(name)s - [%(levelname)s] - %(message)s"
-            )
-
-            # 🖥 Console Handler (stdout)
-            ch = logging.StreamHandler()
-            ch.setLevel(log_level)  # Use the dynamically set log level
-            ch.setFormatter(log_format)
-            cls._instance.logger.addHandler(ch)
-
-            # 📄 File Handler (logs in file)
-            fh = logging.FileHandler(log_file, encoding="utf-8")
-            fh.setLevel(log_level)  # Use the dynamically set log level
-            fh.setFormatter(log_format)
-            cls._instance.logger.addHandler(fh)
-
-            handlers = cls._instance.logger.handlers
-            i = 1
-            for handler in handlers:
-                print(f"{i} : {handler}")
-                i = i + 1
-
+    def __new__(cls, config: dict[str, Any] | None = None):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialize_logger(config)
         return cls._instance
+
+    def _initialize_logger(self, config: dict[str, Any] | None = None):
+        self.logger = logging.getLogger("kafka_consumer")
+
+        default_config: dict[str, Any] = {
+            "level": LogLevel.INFO,
+            "handlers": ["console"],
+            "console_level": LogLevel.INFO,
+            "file_enabled": False,
+            "file_path": "logs/app.log",
+            "file_level": LogLevel.INFO,
+        }
+
+        if config:
+            default_config.update(config)
+
+        self.logger.handlers.clear()
+
+        self.logger.setLevel(
+            LogLevel.get_logging_level(default_config["level"])
+        )
+
+        if "console" in default_config["handlers"]:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(
+                LogLevel.get_logging_level(default_config["console_level"])
+            )
+            console_handler.setFormatter(CustomFormatter())
+            self.logger.addHandler(console_handler)
+
+        if default_config["file_enabled"] and "file" in default_config["handlers"]:
+            file_handler = logging.FileHandler(default_config["file_path"])
+            file_handler.setLevel(
+                LogLevel.get_logging_level(default_config["file_level"])
+            )
+            file_handler.setFormatter(
+                logging.Formatter(CustomFormatter.BASE_FORMAT)
+            )
+            self.logger.addHandler(file_handler)
+
+    @classmethod
+    def get_logger(
+        cls,
+        console_only: bool = True,
+        level: LogLevel = LogLevel.INFO,
+    ) -> logging.Logger:
+        config: dict[str, Any] = {
+            "level": level,
+            "handlers": ["console"] if console_only else ["console", "file"],
+            "console_level": level,
+            "file_enabled": not console_only,
+            "file_level": level,
+        }
+        return LoggerSingleton(config).logger
