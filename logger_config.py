@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from enum import StrEnum
 from typing import Any
 
@@ -41,15 +42,40 @@ class CustomFormatter(logging.Formatter):
     }
 
     RESET = "\x1b[0m"
-    BASE_FORMAT = "%(asctime)s - %(name)s - [%(levelname)8s] - %(message)s"
+    BASE_FORMAT = (
+        "%(asctime)s - %(name)s - [%(levelname)8s] - %(message)s"
+    )
 
     def format(self, record: logging.LogRecord) -> str:
         level_enum = LogLevel.from_logging_level(record.levelno)
         color = self.COLORS.get(level_enum, self.RESET)
 
-        log_fmt = f"{color}{self.BASE_FORMAT}{self.RESET}"
-        formatter = logging.Formatter(log_fmt)
-        return formatter.format(record)
+        formatter = logging.Formatter(
+            f"{color}{self.BASE_FORMAT}{self.RESET}"
+        )
+
+        message = formatter.format(record)
+
+        if record.exc_info:
+            exc_type, exc_value, exc_tb = record.exc_info
+
+            exception_details = f"""
+Exception Details:
+type={type(exc_value).__name__}
+module={type(exc_value).__module__}
+str={str(exc_value)}
+repr={repr(exc_value)}
+args={exc_value.args}
+cause={repr(exc_value.__cause__)}
+context={repr(exc_value.__context__)}
+
+Traceback:
+{''.join(traceback.format_exception(exc_type, exc_value, exc_tb))}
+""".rstrip()
+
+            message += exception_details
+
+        return message
 
 
 class LoggerSingleton:
